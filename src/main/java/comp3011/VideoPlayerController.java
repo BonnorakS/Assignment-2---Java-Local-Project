@@ -4,7 +4,7 @@
  * 
  * Authors:
  *   1. Simon Ratcliffe, in collaboration with GPT-5.6 Terra
- *   2. <student name and student number insert here upon modification>
+ *   2. <Bonnorak SUN - a3150511>
  *
  * Copyright 2026 Simon Ratcliffe
  */
@@ -12,7 +12,8 @@ package comp3011;
 
 import java.io.File;
 import java.util.function.BiConsumer;
-
+//NEW: Used for the list of configured frame processors.
+import java.util.List;
 import javafx.scene.Scene;
 import javafx.scene.image.Image;
 import javafx.scene.input.KeyCode;
@@ -33,11 +34,15 @@ public class VideoPlayerController {
 
     public VideoPlayerController(
             boolean audioEnabled,
+         // CHANGE: Add List<FrameProcessor> frameProcessors as a parameter.
+            List<FrameProcessor> frameProcessors,
             BiConsumer<Integer, Integer> videoSizeChangedHandler) {
         this.view = new VideoPlayerView();
         this.videoSizeChangedHandler = videoSizeChangedHandler;
         model = new VideoPlayerModel(
                 audioEnabled,
+             // CHANGE: Pass frameProcessors into VideoPlayerModel.
+                frameProcessors,
                 this::onVideoSizeChanged,
                 this::onFrameReady,
                 this::onStatusChanged,

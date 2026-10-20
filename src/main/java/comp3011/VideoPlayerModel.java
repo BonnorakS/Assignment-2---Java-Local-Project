@@ -219,6 +219,8 @@ public class VideoPlayerModel {
         seekTo(baseTimestampUs + offsetUs);
     }
 
+    // CHANGE: Queue seeking on the frame worker so the JavaFX thread
+    // never waits for decoderLock while an expensive frame is processing.
     private void seekTo(long timestampUs) {
         long logicalTimestampUs = clampSeekTimestamp(timestampUs);
         long grabTimestampUs = displayableSeekTimestamp(logicalTimestampUs);
@@ -228,22 +230,56 @@ public class VideoPlayerModel {
             return;
         }
 
+        // CHANGE: Invalidate any frame currently being prepared.
+        long seekGeneration = ++playbackGeneration;
+        preparedFrame = null;
+        relativeSeekBaseUs = logicalTimestampUs;
+
         try {
-        	synchronized (decoderLock) {
-        		// NEW: Invalidate any result being prepared for the old position.
-        		playbackGeneration++;
-        		framePreparationInProgress = false;
-        		grabber.setTimestamp(grabTimestampUs);
-                resetPlaybackClock(logicalTimestampUs);
-        		
-        	}
-          
-            flushAudioOutput();
-            notifyPlaybackStateChanged();
-        } catch (Exception e) {
-            handlePlaybackError(e);
+            frameWorker.execute(() -> {
+                Exception failure = null;
+
+                try {
+                    synchronized (decoderLock) {
+                        // CHANGE: Ignore this seek if a newer seek or
+                        // playBack session has superseded it.
+                        if (!playbackOpen || seekGeneration != playbackGeneration) {
+                            return;
+                        }
+
+                        grabber.setTimestamp(grabTimestampUs);
+                    }
+                } catch (Exception e) {
+                    failure = e;
+                }
+
+                final Exception seekFailure = failure;
+
+                Platform.runLater(() -> {
+                    if (!playbackOpen || seekGeneration != playbackGeneration) {
+                        return;
+                    }
+
+                    if (seekFailure != null) {
+                        handlePlaybackError(seekFailure);
+                        return;
+                    }
+
+                    // CHANGE: Reset playBack timing on the JavaFX thread
+                    // after the decoder has completed the seek.
+                    resetPlaybackClock(logicalTimestampUs);
+                    framePreparationInProgress = false;
+                    prepareNextFrame();
+                    flushAudioOutput();
+                    notifyPlaybackStateChanged();
+                });
+            });
+        } catch (RejectedExecutionException e) {
+            // The worker may already be shutting down.
+            // Do not block the JavaFX thread trying to recover.
         }
     }
+
 
     private void startPlayback(long startTimestampUs, boolean initiallyPaused, long initialRelativeSeekBaseUs) {
         closePlaybackResources();

@@ -33,15 +33,20 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.RejectedExecutionException;
 
 /**
- * The model part of the video player model-view-controller architecture.
+ * The model in the video player's model-view-controller architecture.
  *
- * <p>
- * Owns the FFmpeg decoder, playback clock, seeking logic, audio scheduling,
- * and frame processing - which it all manages through cooperative multi-tasking
- * on a single thread. It publishes decoded frames and playback state through
- * callbacks supplied by its owning {@link VideoPlayerController}, keeping it
- * decoupled from the JavaFX view.
- * </p>
+ * Owns playback state, the FFmpeg decoder, audio scheduling, and
+ * frame-processing coordination.
+ *
+ * Video decoding runs on a dedicated worker. Decoded frames are
+ * processed by a bounded pool, with independent FrameProcessor
+ * instances for each worker. Completed frames are ordered before
+ * publication to the JavaFX view.
+ *
+ * Playback generations reject stale results after a playback change.
+ * Bounded in-flight work limits memory use and prevents unbounded
+ * accumulation of frames. UI-facing callbacks are dispatched through
+ * the JavaFX application thread.
  */
 public class VideoPlayerModel {
     private static final long NO_SEEK_REQUEST = -1; // Sentinel value used when no seek position is active.

@@ -31,13 +31,24 @@ import org.bytedeco.javacv.Frame;
  */
 public abstract class FrameProcessor {
     protected InfoVideo videoInfo;
-
+    
+    // NEW: Optional seed identify shared by worker-local processor instances.
+    private Integer seedInstanceIndex;
+    protected final void setSeedInstanceIndex(int instanceIndex) {
+    	this.seedInstanceIndex = instanceIndex;
+    }
+    protected final int getSeedInstanceIndex(int defaultInstanceIndex) {
+    	return seedInstanceIndex != null ? seedInstanceIndex : defaultInstanceIndex;
+    }
     public FrameProcessor() {
     }
 
     public void initialise(InfoVideo videoInfo) throws Exception {
         this.videoInfo = videoInfo;
     }
+    
+    //NEW: Create an independent processor instance for each worker.
+    public abstract FrameProcessor copyForWorker();
 
     // Obtain a unique seed for this media name and effect instance index. That is, for a given media name, say
     // 'movie.mp4' and a given position in the list of effects being applied, this will return a unique and different
@@ -55,4 +66,5 @@ public abstract class FrameProcessor {
     }
 
     public abstract void process(Frame frame, InfoFrame info) throws Exception;
+    
 }

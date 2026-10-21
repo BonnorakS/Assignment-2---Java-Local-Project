@@ -41,6 +41,12 @@ public class FrameYellower extends FrameProcessor {
         super.initialise(videoInfo);
         buildLookups();
     }
+    
+    //NEW: Create an independent worker instance with the same seed identity.
+    @Override
+    public FrameProcessor copyForWorker() {
+    	return new FrameYellower();
+    }
 
     @Override
     public void process(Frame frame, InfoFrame info) throws Exception {

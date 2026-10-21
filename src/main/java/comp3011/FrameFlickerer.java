@@ -41,7 +41,15 @@ public class FrameFlickerer extends FrameProcessor {
     @Override
     public void initialise(InfoVideo videoInfo) throws Exception {
         super.initialise(videoInfo);
-        mediaSeed = saltedMediaSeed(videoInfo.mediaName(), instanceIndex);
+        mediaSeed = saltedMediaSeed(videoInfo.mediaName(),  getSeedInstanceIndex(instanceIndex));
+    }
+    
+    //NEW: Create an independent worker instance with the same seed identity.
+    @Override
+    public FrameProcessor copyForWorker() {
+    	FrameFlickerer copy = new FrameFlickerer();
+    	copy.setSeedInstanceIndex(getSeedInstanceIndex(instanceIndex));
+    	return copy;
     }
 
     @Override

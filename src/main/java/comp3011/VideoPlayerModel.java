@@ -48,20 +48,15 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * The model in the video player's model-view-controller architecture.
+ * The model part of the video player model-view-controller architecture.
  *
- * Owns playback state, the FFmpeg decoder, audio scheduling, and
- * frame-processing coordination.
- *
- * Video decoding runs on a dedicated worker. Decoded frames are
- * processed by a bounded pool, with independent FrameProcessor
- * instances for each worker. Completed frames are ordered before
- * publication to the JavaFX view.
- *
- * Playback generations reject stale results after a playback change.
- * Bounded in-flight work limits memory use and prevents unbounded
- * accumulation of frames. UI-facing callbacks are dispatched through
- * the JavaFX application thread.
+ * <p>
+ * Owns the FFmpeg decoder, playback clock, seeking logic, audio scheduling,
+ * and frame processing - which it all manages through cooperative multi-tasking
+ * on a single thread. It publishes decoded frames and playback state through
+ * callbacks supplied by its owning {@link VideoPlayerController}, keeping it
+ * decoupled from the JavaFX view.
+ * </p>
  */
 public class VideoPlayerModel {
 	// NEW: Bounded pool for frame-processing jobs.
@@ -93,6 +88,9 @@ public class VideoPlayerModel {
     private final BiConsumer<Boolean, Boolean> playbackStateChangedHandler;
     private final Consumer<Boolean> audioOutputStateChangedHandler;
     
+    
+    // NEW: One independent processor chain per processing worker.
+    private final List<List<FrameProcessor>> workerProcessorChains = new ArrayList<>();
     // NEW: Perform expensive decoding, conversion and effects in the background.
     private final ExecutorService frameWorker = Executors.newSingleThreadExecutor(task -> {
     	Thread thread = new Thread(task, "video-frame-worker");
@@ -135,6 +133,7 @@ public class VideoPlayerModel {
     private volatile boolean audioOutputEnabled;
     private volatile boolean audioAvailable;
     private boolean pauseRequested;
+    private boolean frameProcessorsInitialised;
     private long currentTimestampUs;
     private long videoDurationUs = NO_SEEK_REQUEST;
     private int videoFrameDurationUs;
@@ -348,6 +347,7 @@ public class VideoPlayerModel {
     }
 
     private void openPlaybackResources(long startTimestampUs) throws Exception {
+        
         grabber = new FFmpegFrameGrabber(videoFile);
         grabber.setImageMode(FrameGrabber.ImageMode.COLOR);
         grabber.setSampleMode(FrameGrabber.SampleMode.SHORT);
@@ -752,6 +752,7 @@ private void closePlaybackResources() {
         playbackStartNs = 0;
         pauseStartedNs = 0;
         audioAvailable = false;
+        frameProcessorsInitialised = false;
 
         if (audioPlayer != null) {
             audioPlayer.close();
@@ -817,6 +818,31 @@ private void closePlaybackResources() {
             }
             processor.process(frame, info);
         }
+    }
+
+    private void initialiseFrameProcessors(InfoVideo videoInfo) throws Exception {
+        for (FrameProcessor processor : frameProcessors) {
+            processor.initialise(videoInfo);
+        }
+    }
+    
+    // NEW: Create an independent processor chain for a worker.
+    private List<FrameProcessor> createWorkerProcessors(InfoVideo videoInfo) throws Exception{
+    	List<FrameProcessor> workerProcessors = new ArrayList<>();
+    	for (FrameProcessor processor : frameProcessors) {
+    		FrameProcessor copy = processor.copyForWorker();
+    		copy.initialise(videoInfo);
+    		workerProcessors.add(copy);
+    	}
+    	return workerProcessors;
+    }
+    
+    //NEW: Initialise one processor chain per worker for the current video.
+    private void initialiseWorkerProcessorChains(InfoVideo videoInfo) throws Exception{
+    	workerProcessorChains.clear();
+    	for (int i = 0; i < FRAME_WORKER_COUNT; i++) {
+    		workerProcessorChains.add(createWorkerProcessors(videoInfo));
+    	}
     }
     
     //NEW: Initialise worker-specific effects before processing frames.

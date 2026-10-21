@@ -80,9 +80,18 @@ public class FrameMottler extends FrameProcessor {
     @Override
     public void initialise(InfoVideo videoInfo) throws Exception {
         super.initialise(videoInfo);
-        mediaSeed = saltedMediaSeed(videoInfo.mediaName(), instanceIndex + SEED_SALT);
+        //CHANGE: Keep the original effect's seed across worker-local instances.
+        mediaSeed = saltedMediaSeed(videoInfo.mediaName(), getSeedInstanceIndex(instanceIndex) + SEED_SALT);
         buildSamplingLookups();
         buildScaleLookups();
+    }
+    
+    //NEW: Create an independent Worker instance with the same seed identity.
+    @Override
+    public FrameProcessor copyForWorker() {
+    	FrameMottler copy = new FrameMottler();
+    	copy.setSeedInstanceIndex(getSeedInstanceIndex(instanceIndex));
+    	return copy;
     }
 
     @Override

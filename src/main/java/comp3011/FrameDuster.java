@@ -50,7 +50,15 @@ public class FrameDuster extends FrameProcessor {
     @Override
     public void initialise(InfoVideo videoInfo) throws Exception {
         super.initialise(videoInfo);
-        mediaSeed = saltedMediaSeed(videoInfo.mediaName(), instanceIndex + SEED_SALT);
+        mediaSeed = saltedMediaSeed(videoInfo.mediaName(),  getSeedInstanceIndex(instanceIndex) + SEED_SALT);
+    }
+    
+    // NEW: Create an independent worker instance with the same seed identity.
+    @Override
+    public FrameProcessor copyForWorker() {
+    	FrameDuster copy = new FrameDuster();
+    	copy.setSeedInstanceIndex(getSeedInstanceIndex(instanceIndex));
+    	return copy;
     }
 
     @Override

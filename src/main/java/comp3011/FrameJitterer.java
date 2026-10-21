@@ -44,12 +44,20 @@ public class FrameJitterer extends FrameProcessor {
     @Override
     public void initialise(InfoVideo videoInfo) throws Exception {
         super.initialise(videoInfo);
-        mediaSeed = saltedMediaSeed(videoInfo.mediaName(), instanceIndex + SEED_SALT);
+        mediaSeed = saltedMediaSeed(videoInfo.mediaName(), getSeedInstanceIndex(instanceIndex) + SEED_SALT);
 
         int frameBytes = videoInfo.imageStride() * videoInfo.imageHeight();
         int widthBytes = videoInfo.imageWidth() * videoInfo.imageChannels();
         sourcePixels = new byte[frameBytes];
         blackRow = new byte[widthBytes];
+    }
+    
+    //NEW: Create an independent worker instance with the same seed identity.
+    @Override 
+    public FrameProcessor copyForWorker() {
+        FrameJitterer copy = new FrameJitterer();
+        copy.setSeedInstanceIndex(getSeedInstanceIndex(instanceIndex));
+        return copy;
     }
 
     @Override
@@ -129,16 +137,18 @@ public class FrameJitterer extends FrameProcessor {
         int stride = videoInfo.imageStride();
         int frameBytes = stride * height;
         int widthBytes = width * channels;
-
+        // Preserve the original pixels before shifting them.
         ByteBuffer source = pixels.duplicate();
         source.clear();
         source.get(sourcePixels, 0, frameBytes);
-
+        
+        //CHANGE: Create the destination view only once.
+        ByteBuffer destination = pixels.duplicate();
+        destination.clear();
+        //Clear the visible part of each row to black.
         for (int y = 0; y < height; y++) {
-            ByteBuffer destinationRow = pixels.duplicate();
-            destinationRow.clear();
-            destinationRow.position(y * stride);
-            destinationRow.put(blackRow, 0, widthBytes);
+            destination.position(y * stride);
+            destination.put(blackRow, 0, widthBytes);
         }
 
         int sourceYStart = Math.max(0, -yOffset);
@@ -152,14 +162,12 @@ public class FrameJitterer extends FrameProcessor {
         int sourceXByteStart = sourceXStart * channels;
         int destinationXByteStart = destinationXStart * channels;
         int rowBytesToCopy = pixelsToCopy * channels;
-
-        for (int row = 0; row < rowsToCopy; row++) {
-            int sourceIndex = (sourceYStart + row) * stride + sourceXByteStart;
-            int destinationIndex = (destinationYStart + row) * stride + destinationXByteStart;
-
-            ByteBuffer destination = pixels.duplicate();
-            destination.clear();
-            destination.position(destinationIndex);
+        
+        // CHANGE: Reuse the destination view for all shifted rows.
+        for (int row =0; row < rowsToCopy; row++) {
+        	int sourceIndex = (sourceYStart + row) * stride + sourceXByteStart;
+        	int destinationIndex = (destinationYStart + row) * stride + destinationXByteStart;
+        	destination.position(destinationIndex);
             destination.put(sourcePixels, sourceIndex, rowBytesToCopy);
         }
     }

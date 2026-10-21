@@ -28,6 +28,12 @@ public class FrameBlackAndWhiter extends FrameProcessor {
     public FrameBlackAndWhiter() {
         super();
     }
+    
+    //NEW: Create an independent worker instance with the same seed identity.
+    @Override
+    public FrameProcessor copyForWorker() {
+    	return new FrameBlackAndWhiter();
+    }
 
     @Override
     public void process(Frame frame, InfoFrame info) throws Exception {

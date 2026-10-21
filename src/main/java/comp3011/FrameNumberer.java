@@ -56,6 +56,12 @@ public class FrameNumberer extends FrameProcessor {
 
     public FrameNumberer() {
     }
+    
+    //NEW: Create an independent worker instance with the same seed identity.
+    @Override
+    public FrameProcessor copyForWorker() {
+    	return new FrameNumberer();
+    }
 
     @Override
     public void process(Frame frame, InfoFrame info) throws Exception {

@@ -14,6 +14,8 @@ import java.nio.ByteBuffer;
 
 import org.bytedeco.javacv.Frame;
 
+// NEW: Imports
+import java.util.stream.IntStream;
 /**
  * Simulates bright light bleeding into nearby pixels, with a warm colour bias.
  * This one is expensive in CPU time!
@@ -58,6 +60,12 @@ public class FrameBleeder extends FrameProcessor {
         horizontalBlurMask = new double[brightMask.length];
         blurredMask = new double[brightMask.length];
         buildSamplingLookups();
+    }
+    
+    // NEW: Create an independent worker instance with the same seed identity.
+    @Override 
+    public FrameProcessor copyForWorker() {
+    	return new FrameBleeder();
     }
 
     @Override
@@ -117,38 +125,45 @@ public class FrameBleeder extends FrameProcessor {
         }
     }
 
-    private void buildBrightMask(ByteBuffer pixels) {
-        int width = videoInfo.imageWidth();
-        int height = videoInfo.imageHeight();
-        int channels = videoInfo.imageChannels();
-        int stride = videoInfo.imageStride();
 
-        for (int maskY = 0; maskY < maskHeight; maskY++) {
-            int blockY = maskY * MASK_BLOCK_SIZE;
-            int blockYEnd = Math.min(blockY + MASK_BLOCK_SIZE, height);
+private void buildBrightMask(ByteBuffer pixels) {
+    int width = videoInfo.imageWidth();
+    int height = videoInfo.imageHeight();
+    int channels = videoInfo.imageChannels();
+    int stride = videoInfo.imageStride();
 
-            for (int maskX = 0; maskX < maskWidth; maskX++) {
-                int blockX = maskX * MASK_BLOCK_SIZE;
-                int blockXEnd = Math.min(blockX + MASK_BLOCK_SIZE, width);
-                int maximumLuminance = 0;
+    // CHANGE: Process independent mask rows in parallel.
+    IntStream.range(0, maskHeight).parallel().forEach(maskY -> {
+        int blockY = maskY * MASK_BLOCK_SIZE;
+        int blockYEnd = Math.min(blockY + MASK_BLOCK_SIZE, height);
 
-                for (int y = blockY; y < blockYEnd; y++) {
-                    int rowStart = y * stride;
-                    for (int x = blockX; x < blockXEnd; x++) {
-                        int base = rowStart + x * channels;
-                        // JavaCV supplies these decoded frames in BGR byte order.
-                        int b = Byte.toUnsignedInt(pixels.get(base));
-                        int g = Byte.toUnsignedInt(pixels.get(base + 1));
-                        int r = Byte.toUnsignedInt(pixels.get(base + 2));
-                        int luminance = (54 * r + 183 * g + 19 * b) / 256;
-                        maximumLuminance = Math.max(maximumLuminance, luminance);
-                    }
+        for (int maskX = 0; maskX < maskWidth; maskX++) {
+            int blockX = maskX * MASK_BLOCK_SIZE;
+            int blockXEnd = Math.min(blockX + MASK_BLOCK_SIZE, width);
+            int maximumLuminance = 0;
+
+            for (int y = blockY; y < blockYEnd; y++) {
+                int rowStart = y * stride;
+
+                for (int x = blockX; x < blockXEnd; x++) {
+                    int base = rowStart + x * channels;
+
+                    // JavaCV supplies decoded frames in BGR byte order.
+                    int b = Byte.toUnsignedInt(pixels.get(base));
+                    int g = Byte.toUnsignedInt(pixels.get(base + 1));
+                    int r = Byte.toUnsignedInt(pixels.get(base + 2));
+
+                    int luminance = (54 * r + 183 * g + 19 * b) / 256;
+                    maximumLuminance = Math.max(maximumLuminance, luminance);
                 }
-
-                brightMask[maskY * maskWidth + maskX] = thresholdedBrightness(maximumLuminance);
             }
+
+            // Each parallel task writes to its own mask row.
+            brightMask[maskY * maskWidth + maskX] =
+                    thresholdedBrightness(maximumLuminance);
         }
-    }
+    });
+}
 
     private double thresholdedBrightness(int luminance) {
         if (luminance <= BLEED_LUMINANCE_THRESHOLD) {
@@ -164,67 +179,79 @@ public class FrameBleeder extends FrameProcessor {
         blurVertically(horizontalBlurMask, blurredMask);
     }
 
-    private void blurHorizontally(double[] source, double[] destination) {
-        for (int y = 0; y < maskHeight; y++) {
-            int rowStart = y * maskWidth;
-            for (int x = 0; x < maskWidth; x++) {
-                double total = 0.0;
-                int samples = 0;
 
-                for (int dx = -BLUR_RADIUS; dx <= BLUR_RADIUS; dx++) {
-                    int sampleX = clamp(x + dx, 0, maskWidth - 1);
-                    total += source[rowStart + sampleX];
-                    samples++;
-                }
+private void blurHorizontally(double[] source, double[] destination) {
+    // CHANGE: Each task reads the source and writes to one distinct row.
+    IntStream.range(0, maskHeight).parallel().forEach(y -> {
+        int rowStart = y * maskWidth;
 
-                destination[rowStart + x] = total / samples;
+        for (int x = 0; x < maskWidth; x++) {
+            double total = 0.0;
+            int samples = 0;
+
+            for (int dx = -BLUR_RADIUS; dx <= BLUR_RADIUS; dx++) {
+                int sampleX = clamp(x + dx, 0, maskWidth - 1);
+                total += source[rowStart + sampleX];
+                samples++;
             }
+
+            destination[rowStart + x] = total / samples;
         }
-    }
+    });
+}
 
-    private void blurVertically(double[] source, double[] destination) {
-        for (int y = 0; y < maskHeight; y++) {
-            for (int x = 0; x < maskWidth; x++) {
-                double total = 0.0;
-                int samples = 0;
 
-                for (int dy = -BLUR_RADIUS; dy <= BLUR_RADIUS; dy++) {
-                    int sampleY = clamp(y + dy, 0, maskHeight - 1);
-                    total += source[sampleY * maskWidth + x];
-                    samples++;
-                }
+private void blurVertically(double[] source, double[] destination) {
+    // CHANGE: Different tasks write to different destination rows.
+    IntStream.range(0, maskHeight).parallel().forEach(y -> {
+        for (int x = 0; x < maskWidth; x++) {
+            double total = 0.0;
+            int samples = 0;
 
-                destination[y * maskWidth + x] = total / samples;
+            for (int dy = -BLUR_RADIUS; dy <= BLUR_RADIUS; dy++) {
+                int sampleY = clamp(y + dy, 0, maskHeight - 1);
+                total += source[sampleY * maskWidth + x];
+                samples++;
             }
+
+            destination[y * maskWidth + x] = total / samples;
         }
-    }
+    });
+}
 
-    private void applyBleed(ByteBuffer pixels) {
-        int width = videoInfo.imageWidth();
-        int height = videoInfo.imageHeight();
-        int channels = videoInfo.imageChannels();
-        int stride = videoInfo.imageStride();
 
-        for (int y = 0; y < height; y++) {
-            int rowStart = y * stride;
+private void applyBleed(ByteBuffer pixels) {
+    int width = videoInfo.imageWidth();
+    int height = videoInfo.imageHeight();
+    int channels = videoInfo.imageChannels();
+    int stride = videoInfo.imageStride();
 
-            for (int x = 0; x < width; x++) {
-                double bleedStrength = sampleBlurredMask(x, y);
-                if (bleedStrength <= 0.0) {
-                    continue;
-                }
+    // CHANGE: Each task modifies a different image row.
+    IntStream.range(0, height).parallel().forEach(y -> {
+        int rowStart = y * stride;
 
-                int blueBoost = (int) Math.round(bleedStrength * BLUE_BLEED_STRENGTH);
-                int greenBoost = (int) Math.round(bleedStrength * GREEN_BLEED_STRENGTH);
-                int redBoost = (int) Math.round(bleedStrength * RED_BLEED_STRENGTH);
-                int base = rowStart + x * channels;
+        for (int x = 0; x < width; x++) {
+            double bleedStrength = sampleBlurredMask(x, y);
 
-                pixels.put(base, boostedByte(pixels.get(base), blueBoost));
-                pixels.put(base + 1, boostedByte(pixels.get(base + 1), greenBoost));
-                pixels.put(base + 2, boostedByte(pixels.get(base + 2), redBoost));
+            if (bleedStrength <= 0.0) {
+                continue;
             }
+
+            int blueBoost =
+                    (int) Math.round(bleedStrength * BLUE_BLEED_STRENGTH);
+            int greenBoost =
+                    (int) Math.round(bleedStrength * GREEN_BLEED_STRENGTH);
+            int redBoost =
+                    (int) Math.round(bleedStrength * RED_BLEED_STRENGTH);
+
+            int base = rowStart + x * channels;
+
+            pixels.put(base, boostedByte(pixels.get(base), blueBoost));
+            pixels.put(base + 1, boostedByte(pixels.get(base + 1), greenBoost));
+            pixels.put(base + 2, boostedByte(pixels.get(base + 2), redBoost));
         }
-    }
+    });
+}
 
     private double sampleBlurredMask(int x, int y) {
         int x0 = xMaskLeft[x];
